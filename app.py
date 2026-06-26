@@ -103,7 +103,7 @@ else:
         }
 
         /* 일반 버튼 (저장 등) — 뒤로가기 제외 */
-        div[data-testid="stHorizontalBlock"]:first-of-type ~ div div[data-testid="stButton"] > button:not(:disabled) {
+        div[data-testid="stButton"] > button:not(:disabled) {
             background-color: #ffffff !important;
             color: #000000 !important;
             border: 1px solid #2e7d32 !important;
@@ -290,7 +290,7 @@ def show_notices(notices, date_key="날짜", category=""):
         for i, notice in enumerate(notices):
             date_val = notice.get(date_key, "") or notice.get("신청기간", "")
             is_bookmarked = any(b["제목"] == notice["제목"] for b in st.session_state.bookmarks)
-            col_notice, col_detail, col_btn = st.columns([10, 1, 1])
+            col_notice, col_btns = st.columns([8, 2])
             with col_notice:
                 st.markdown(f"""
                 <div class="notice-item">
@@ -298,19 +298,20 @@ def show_notices(notices, date_key="날짜", category=""):
                     <span style="font-size: 14px;">📅 {date_val if date_val else '-'}</span>
                 </div>
                 """, unsafe_allow_html=True)
-            with col_detail:
+            with col_btns:
                 st.write("")
-                if st.button("🔍", key=f"detail_{category}_{i}"):
-                    st.session_state.selected_notice = {**notice, "카테고리": category, "date_key": date_key}
-                    st.session_state.page = "detail"
-                    st.rerun()
-            with col_btn:
-                st.write("")
-                if st.button("⭐" if is_bookmarked else "☆", key=f"bm_{category}_{i}"):
-                    if is_bookmarked:
-                        st.session_state.bookmarks = [b for b in st.session_state.bookmarks if b["제목"] != notice["제목"]]
-                    else:
-                        st.session_state.bookmarks.append({**notice, "카테고리": category})
+                bcol1, bcol2 = st.columns(2)
+                with bcol1:
+                    if st.button("🔍", key=f"detail_{category}_{i}"):
+                        st.session_state.selected_notice = {**notice, "카테고리": category, "date_key": date_key}
+                        st.session_state.page = "detail"
+                        st.rerun()
+                with bcol2:
+                    if st.button("⭐" if is_bookmarked else "☆", key=f"bm_{category}_{i}"):
+                        if is_bookmarked:
+                            st.session_state.bookmarks = [b for b in st.session_state.bookmarks if b["제목"] != notice["제목"]]
+                        else:
+                            st.session_state.bookmarks.append({**notice, "카테고리": category})
                     st.rerun()
     else:
         st.info("공지를 불러오는 중입니다...")
