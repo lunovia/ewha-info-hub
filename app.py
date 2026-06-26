@@ -178,7 +178,7 @@ COLLEGES = [
 ]
 INTERESTS = ["장학금", "교환학생/해외", "취업/인턴", "창업", "연구", "봉사/사회활동", "문화/예술", "프로그램"]
 
-@st.cache_data(ttl=3600)
+@st.cache_data
 def get_scholarship_notices():
     BASE = "https://www.ewha.ac.kr/ewha/bachelor/scholarship-notice.do"
     headers = {"User-Agent": "Mozilla/5.0"}
@@ -201,7 +201,7 @@ def get_scholarship_notices():
         notices.append({"제목": title, "신청기간": date, "링크": link})
     return notices
 
-@st.cache_data(ttl=3600)
+@st.cache_data
 def get_exchange_notices():
     DOMAIN = "https://oia.ewha.ac.kr"
     URL = f"{DOMAIN}/oia/1136/subview.do"
@@ -224,7 +224,7 @@ def get_exchange_notices():
             notices.append({"제목": title, "날짜": date, "링크": link})
     return notices
 
-@st.cache_data(ttl=3600)
+@st.cache_data
 def get_job_notices():
     BASE = "https://job.ewha.ac.kr/job/intro/Information-notice.do"
     headers = {"User-Agent": "Mozilla/5.0"}
