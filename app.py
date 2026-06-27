@@ -5,6 +5,7 @@ import re
 import os
 from bs4 import BeautifulSoup
 from groq import Groq
+from supabase import create_client
 
 st.set_page_config(page_title="이화여대 정보 통합", page_icon="🌱", layout="wide")
 
@@ -171,6 +172,31 @@ else:
     </style>
     """, unsafe_allow_html=True)
 
+@st.cache_resource
+def get_supabase():
+    url = os.environ.get("SUPABASE_URL")
+    key = os.environ.get("SUPABASE_KEY")
+    if url and key:
+        return create_client(url, key)
+    return None
+
+def save_to_db(notices, category):
+    db = get_supabase()
+    if not db:
+        return
+    try:
+        rows = [{"category": category, "title": n.get("제목", ""), "date": n.get("날짜", "") or n.get("신청기간", ""), "link": n.get("링크", "")} for n in notices]
+        db.table("notices").insert(rows).execute()
+    except Exception:
+        pass
+
+def load_from_db(category):
+    db = get_supabase()
+    if not db:
+        return []
+    result = db.table("notices").select("*").eq("category", category).execute()
+    return [{"제목": r["title"], "날짜": r["date"], "신청기간": r["date"], "링크": r["link"]} for r in result.data]
+
 COLLEGES = [
     "선택 안 함", "인문과학대학", "사회과학대학", "자연과학대학", "엘텍공과대학",
     "사범대학", "음악대학", "조형예술대학", "체육과학부",
@@ -180,6 +206,9 @@ INTERESTS = ["장학금", "교환학생/해외", "취업/인턴", "창업", "연
 
 @st.cache_data
 def get_scholarship_notices():
+    cached = load_from_db("장학금")
+    if cached:
+        return cached
     BASE = "https://www.ewha.ac.kr/ewha/bachelor/scholarship-notice.do"
     headers = {"User-Agent": "Mozilla/5.0"}
     response = requests.get(BASE, headers=headers)
@@ -199,10 +228,14 @@ def get_scholarship_notices():
         href = title_tag.get("href", "")
         link = BASE + href if href.startswith("?") else href
         notices.append({"제목": title, "신청기간": date, "링크": link})
+    save_to_db(notices, "장학금")
     return notices
 
 @st.cache_data
 def get_exchange_notices():
+    cached = load_from_db("교환학생")
+    if cached:
+        return cached
     DOMAIN = "https://oia.ewha.ac.kr"
     URL = f"{DOMAIN}/oia/1136/subview.do"
     headers = {"User-Agent": "Mozilla/5.0"}
@@ -222,10 +255,14 @@ def get_exchange_notices():
         link = DOMAIN + href if href.startswith("/") else href
         if title:
             notices.append({"제목": title, "날짜": date, "링크": link})
+    save_to_db(notices, "교환학생")
     return notices
 
 @st.cache_data
 def get_job_notices():
+    cached = load_from_db("프로그램/취업")
+    if cached:
+        return cached
     BASE = "https://job.ewha.ac.kr/job/intro/Information-notice.do"
     headers = {"User-Agent": "Mozilla/5.0"}
     response = requests.get(BASE, headers=headers)
@@ -243,6 +280,7 @@ def get_job_notices():
         link = BASE + href if href.startswith("?") else href
         if title:
             notices.append({"제목": title, "날짜": date, "링크": link})
+    save_to_db(notices, "프로그램/취업")
     return notices
 
 def fetch_notice_content(url):
@@ -312,7 +350,7 @@ def show_notices(notices, date_key="날짜", category=""):
                             st.session_state.bookmarks = [b for b in st.session_state.bookmarks if b["제목"] != notice["제목"]]
                         else:
                             st.session_state.bookmarks.append({**notice, "카테고리": category})
-                    st.rerun()
+                        st.rerun()
     else:
         st.info("공지를 불러오는 중입니다...")
 
@@ -353,6 +391,11 @@ if st.session_state.page == "home":
     }, 300);
     </script>
     """, height=0)
+
+    # 홈에서 미리 크롤링 캐시
+    get_scholarship_notices()
+    get_exchange_notices()
+    get_job_notices()
 
     if st.session_state.profile:
         p = st.session_state.profile
