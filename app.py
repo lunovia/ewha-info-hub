@@ -197,6 +197,46 @@ def load_from_db(category):
     result = db.table("notices").select("*").eq("category", category).execute()
     return [{"제목": r["title"], "날짜": r["date"], "신청기간": r["date"], "링크": r["link"]} for r in result.data]
 
+def save_user_to_db(profile):
+    db = get_supabase()
+    if not db:
+        return
+    try:
+        import json
+        db.table("users").upsert({
+            "user_id": profile["아이디"],
+            "grade": profile["학년"],
+            "college": profile["단과대학"],
+            "major": profile["전공"],
+            "email": profile["이메일"],
+            "interests": json.dumps(profile["관심분야"], ensure_ascii=False),
+            "email_notification": profile.get("이메일알림", False)
+        }, on_conflict="user_id").execute()
+    except Exception:
+        pass
+
+def load_user_from_db(user_id):
+    db = get_supabase()
+    if not db:
+        return None
+    try:
+        import json
+        result = db.table("users").select("*").eq("user_id", user_id).execute()
+        if result.data:
+            r = result.data[0]
+            return {
+                "아이디": r["user_id"],
+                "학년": r["grade"],
+                "단과대학": r["college"],
+                "전공": r["major"],
+                "이메일": r["email"],
+                "관심분야": json.loads(r["interests"]) if r["interests"] else [],
+                "이메일알림": r["email_notification"]
+            }
+    except Exception:
+        pass
+    return None
+
 COLLEGES = [
     "선택 안 함", "인문과학대학", "사회과학대학", "자연과학대학", "엘텍공과대학",
     "사범대학", "음악대학", "조형예술대학", "체육과학부",
@@ -493,6 +533,7 @@ elif st.session_state.page == "profile":
                         "전공": major, "이메일": f"{email_prefix}@ewha.ac.kr",
                         "이메일알림": email_notify, "관심분야": interests
                     }
+                    save_user_to_db(st.session_state.profile)
                     st.session_state.editing_profile = False
                     st.success("프로필이 저장됐어요! 🎉")
 
