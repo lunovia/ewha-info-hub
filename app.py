@@ -10,6 +10,41 @@ from supabase import create_client
 
 st.set_page_config(page_title="이화여대 정보 통합", page_icon="🌱", layout="wide")
 
+st.markdown("""
+<style>
+    .stApp { background-color: #e8f5e9; }
+
+    /* 셀렉트박스 */
+    div[data-testid="stSelectbox"] > div > div:first-child {
+        background-color: #ffffff !important;
+        border: 1px solid #2e7d32 !important;
+        border-radius: 8px !important;
+    }
+    div[data-testid="stSelectbox"] span,
+    div[data-testid="stSelectbox"] div[data-baseweb="select"] div {
+        color: #aaaaaa !important;
+    }
+
+    /* 텍스트 인풋 */
+    div[data-testid="stTextInput"] input {
+        background-color: #ffffff !important;
+        border: 1px solid #2e7d32 !important;
+        border-radius: 8px !important;
+        color: #000000 !important;
+    }
+    div[data-testid="stTextInput"] input::placeholder {
+        color: #aaaaaa !important;
+    }
+
+    /* 멀티셀렉트 */
+    div[data-testid="stMultiSelect"] div[data-baseweb="select"] > div:first-child {
+        background-color: #ffffff !important;
+        border: 1px solid #2e7d32 !important;
+        border-radius: 8px !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 if "page" not in st.session_state:
     st.session_state.page = "landing"
 if "profile" not in st.session_state:
@@ -559,6 +594,22 @@ elif st.session_state.page == "login":
 # ── 회원가입 페이지 ──────────────────────────────────────────
 elif st.session_state.page == "signup":
     st.title("🌱 회원가입")
+    components.html("""
+    <script>
+    function updateSelectColor() {
+        const selects = window.parent.document.querySelectorAll('div[data-testid="stSelectbox"]');
+        selects.forEach(function(sel) {
+            const els = sel.querySelectorAll('span, div[data-baseweb="select"] div');
+            const text = sel.innerText.trim();
+            const isPlaceholder = text.startsWith('선택 안 함');
+            els.forEach(function(el) {
+                el.style.setProperty('color', isPlaceholder ? '#aaaaaa' : '#000000', 'important');
+            });
+        });
+    }
+    setInterval(updateSelectColor, 200);
+    </script>
+    """, height=1)
     st.write("")
     new_id = st.text_input("아이디 *", placeholder="영어, 숫자만 입력 가능")
     new_pw = st.text_input("비밀번호 *", type="password", placeholder="비밀번호 입력")
@@ -577,9 +628,12 @@ elif st.session_state.page == "signup":
     interests = st.multiselect("관심 분야 (선택)", INTERESTS)
     email_notify = st.checkbox("📧 이메일로 맞춤 정보 받기 (선택)")
     st.write("")
+    privacy = st.checkbox("✅ 개인정보 수집 및 이용에 동의합니다 (필수)")
+    st.markdown("<p style='font-size:13px; color:#000000;'>* 수집된 정보는 맞춤 공지 제공 목적으로만 사용되며, 외부에 제공되지 않습니다.</p>", unsafe_allow_html=True)
+    st.write("")
     if st.button("가입하기", use_container_width=True):
-        if not new_id or not new_pw or not email_prefix or college == "선택 안 함" or major == "선택 안 함":
-            st.error("필수 항목을 모두 입력해주세요.")
+        if not new_id or not new_pw or not email_prefix or college == "선택 안 함" or major == "선택 안 함" or not privacy:
+            st.error("필수 항목을 모두 입력하고 개인정보 수집에 동의해주세요.")
         elif not re.match(r'^[a-zA-Z0-9]+$', new_id):
             st.error("아이디는 영어, 숫자만 입력 가능해요.")
         elif new_pw != new_pw2:
