@@ -3,6 +3,7 @@ import streamlit.components.v1 as components
 import requests
 import re
 import os
+import hashlib
 from bs4 import BeautifulSoup
 from groq import Groq
 from supabase import create_client
@@ -10,9 +11,11 @@ from supabase import create_client
 st.set_page_config(page_title="이화여대 정보 통합", page_icon="🌱", layout="wide")
 
 if "page" not in st.session_state:
-    st.session_state.page = "home"
+    st.session_state.page = "landing"
 if "profile" not in st.session_state:
     st.session_state.profile = None
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
 if "bookmarks" not in st.session_state:
     st.session_state.bookmarks = []
 if "notification_settings" not in st.session_state:
@@ -21,6 +24,11 @@ if "editing_profile" not in st.session_state:
     st.session_state.editing_profile = False
 if "selected_notice" not in st.session_state:
     st.session_state.selected_notice = None
+
+# 로그인 안 된 상태에서 홈/다른 페이지 접근 시 랜딩으로 리다이렉트
+if not st.session_state.logged_in and st.session_state.page not in ["landing", "login", "signup"]:
+    st.session_state.page = "landing"
+    st.rerun()
 
 if st.session_state.page == "home":
     st.markdown("""
@@ -197,13 +205,16 @@ def load_from_db(category):
     result = db.table("notices").select("*").eq("category", category).execute()
     return [{"제목": r["title"], "날짜": r["date"], "신청기간": r["date"], "링크": r["link"]} for r in result.data]
 
+def hash_password(pw):
+    return hashlib.sha256(pw.encode()).hexdigest()
+
 def save_user_to_db(profile):
     db = get_supabase()
     if not db:
         return
     try:
         import json
-        db.table("users").upsert({
+        data = {
             "user_id": profile["아이디"],
             "grade": profile["학년"],
             "college": profile["단과대학"],
@@ -211,7 +222,10 @@ def save_user_to_db(profile):
             "email": profile["이메일"],
             "interests": json.dumps(profile["관심분야"], ensure_ascii=False),
             "email_notification": profile.get("이메일알림", False)
-        }, on_conflict="user_id").execute()
+        }
+        if profile.get("비밀번호"):
+            data["password"] = hash_password(profile["비밀번호"])
+        db.table("users").upsert(data, on_conflict="user_id").execute()
     except Exception:
         pass
 
@@ -231,17 +245,71 @@ def load_user_from_db(user_id):
                 "전공": r["major"],
                 "이메일": r["email"],
                 "관심분야": json.loads(r["interests"]) if r["interests"] else [],
-                "이메일알림": r["email_notification"]
+                "이메일알림": r["email_notification"],
+                "비밀번호해시": r.get("password", "")
             }
     except Exception:
         pass
     return None
+
+def login_user(user_id, password):
+    profile = load_user_from_db(user_id)
+    if profile and profile.get("비밀번호해시") == hash_password(password):
+        return profile
+    return None
+
+if st.session_state.profile is None:
+    uid = st.query_params.get("uid")
+    if uid:
+        loaded = load_user_from_db(uid)
+        if loaded:
+            st.session_state.profile = loaded
+            st.session_state.logged_in = True
+
+def is_relevant(notice_title, profile):
+    if not profile:
+        return False
+    title = notice_title
+    grade = profile.get("학년", "")
+    college = profile.get("단과대학", "")
+    major = profile.get("전공", "")
+
+    grade_num = grade.replace("학년", "").strip()
+    grade_keywords = {
+        "1": ["1학년", "신입생", "입학"],
+        "2": ["2학년"],
+        "3": ["3학년"],
+        "4": ["4학년", "졸업예정"],
+    }
+    matched_grade = any(kw in title for kw in grade_keywords.get(grade_num, []))
+    general = any(kw in title for kw in ["학부", "재학생", "전교생", "재학", "학부생"])
+    matched_college = college and college != "선택 안 함" and college.replace("대학", "").replace("과학부", "") in title
+    matched_major = major and major != "선택 안 함" and any(kw in title for kw in [major.replace("학과", "").replace("학부", "")])
+
+    return matched_grade or general or matched_college or matched_major
 
 COLLEGES = [
     "선택 안 함", "인문과학대학", "사회과학대학", "자연과학대학", "엘텍공과대학",
     "사범대학", "음악대학", "조형예술대학", "체육과학부",
     "의과대학", "약학대학", "간호과학대학", "경영대학", "신산업융합대학", "인공지능대학"
 ]
+COLLEGE_MAJORS = {
+    "선택 안 함": ["선택 안 함"],
+    "인문과학대학": ["선택 안 함", "국어국문학과", "영어영문학과", "불어불문학과", "독어독문학과", "중어중문학과", "일어일본학과", "철학과", "사학과", "기독교학과"],
+    "사회과학대학": ["선택 안 함", "정치외교학과", "행정학과", "경제학과", "사회학과", "심리학과", "소비자학과", "사회복지학과", "문헌정보학과"],
+    "자연과학대학": ["선택 안 함", "수학과", "통계학과", "물리학과", "화학·나노과학과", "생명과학과"],
+    "엘텍공과대학": ["선택 안 함", "전자전기공학부", "화공신소재공학부", "건축도시시스템공학부", "컴퓨터공학과", "소프트웨어학부", "휴먼기계바이오공학부"],
+    "사범대학": ["선택 안 함", "교육학과", "유아교육학과", "초등교육학과", "교육공학과", "특수교육학과", "윤리교육학과", "과학교육학과", "수학교육학과", "영어교육학과"],
+    "음악대학": ["선택 안 함", "피아노과", "관현악과", "성악과", "작곡과", "한국음악과"],
+    "조형예술대학": ["선택 안 함", "회화·판화과", "조소과", "공예과", "섬유예술패션디자인과", "시각디자인과", "환경디자인과", "디지털미디어학부"],
+    "체육과학부": ["선택 안 함", "체육과학부"],
+    "의과대학": ["선택 안 함", "의학과"],
+    "약학대학": ["선택 안 함", "약학과"],
+    "간호과학대학": ["선택 안 함", "간호학과"],
+    "경영대학": ["선택 안 함", "경영학부"],
+    "신산업융합대학": ["선택 안 함", "식품공학과", "식품영양학과", "의류산업학과", "신산업융합학부"],
+    "인공지능대학": ["선택 안 함", "인공지능학과", "데이터사이언스학부", "사이버보안학과"],
+}
 INTERESTS = ["장학금", "교환학생/해외", "취업/인턴", "창업", "연구", "봉사/사회활동", "문화/예술", "프로그램"]
 
 @st.cache_data
@@ -337,6 +405,38 @@ def fetch_notice_content(url):
     except:
         return ""
 
+def evaluate_target(target_text, profile):
+    if not profile or not target_text:
+        return None
+    grade = profile.get("학년", "")
+    college = profile.get("단과대학", "선택 안 함")
+    major = profile.get("전공", "선택 안 함")
+    notes = []
+
+    grade_num = grade.replace("학년", "").strip()
+    grade_keywords = {"1": ["1학년", "신입생"], "2": ["2학년"], "3": ["3학년"], "4": ["4학년", "졸업예정"]}
+    specific_grade = any(kw in target_text for kws in grade_keywords.values() for kw in kws)
+    if specific_grade:
+        my_keywords = grade_keywords.get(grade_num, [])
+        if any(kw in target_text for kw in my_keywords):
+            notes.append(f"{grade} ✅")
+        else:
+            notes.append(f"{grade}은 해당 안 될 수 있음 ⚠️")
+
+    if "재학생" in target_text or "학부생" in target_text or "본교생" in target_text:
+        notes.append("재학생 해당 ✅")
+
+    if "휴학" in target_text:
+        notes.append("휴학 여부 입력 안 됨, 확인 필요 ⚠️")
+
+    college_short = college.replace("대학", "").replace("과학부", "") if college != "선택 안 함" else ""
+    if college_short and college_short in target_text:
+        notes.append(f"{college} 해당 ✅")
+
+    if not notes:
+        return "프로필 기준 판단 어려움, 직접 확인 필요 ⚠️"
+    return ", ".join(notes)
+
 def get_ai_summary(title, content):
     api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
@@ -364,18 +464,17 @@ def get_ai_summary(title, content):
 
 def show_notices(notices, date_key="날짜", category=""):
     if notices:
+        if st.session_state.profile:
+            notices = sorted(notices, key=lambda n: is_relevant(n["제목"], st.session_state.profile), reverse=True)
         st.write(f"총 **{len(notices)}개** 공지")
         for i, notice in enumerate(notices):
             date_val = notice.get(date_key, "") or notice.get("신청기간", "")
             is_bookmarked = any(b["제목"] == notice["제목"] for b in st.session_state.bookmarks)
             col_notice, col_btns = st.columns([8, 2])
             with col_notice:
-                st.markdown(f"""
-                <div class="notice-item">
-                    <b>{notice['제목']}</b><br>
-                    <span style="font-size: 14px;">📅 {date_val if date_val else '-'}</span>
-                </div>
-                """, unsafe_allow_html=True)
+                relevant = is_relevant(notice["제목"], st.session_state.profile)
+                badge = "<span style='background:#e8f5e9; color:#2e7d32; font-size:12px; padding:2px 8px; border-radius:10px; margin-bottom:4px; display:inline-block;'>✨ 나에게 해당</span><br>" if relevant else ""
+                st.markdown(f'<div class="notice-item">{badge}<b>{notice["제목"]}</b><br><span style="font-size:14px;">📅 {date_val if date_val else "-"}</span></div>', unsafe_allow_html=True)
             with col_btns:
                 st.write("")
                 bcol1, bcol2 = st.columns(2)
@@ -393,6 +492,120 @@ def show_notices(notices, date_key="날짜", category=""):
                         st.rerun()
     else:
         st.info("공지를 불러오는 중입니다...")
+
+# ── 랜딩 페이지 ──────────────────────────────────────────
+if st.session_state.page == "landing":
+    _, col, _ = st.columns([1, 2, 1])
+    with col:
+        st.write("")
+        st.write("")
+        st.write("")
+        st.markdown("<h1 style='text-align:center; font-size:48px;'>🌱</h1>", unsafe_allow_html=True)
+        st.markdown("<h1 style='text-align:center;'>이화여대 정보 허브</h1>", unsafe_allow_html=True)
+        st.markdown("<p style='text-align:center; font-size:18px; color:#555; line-height:2.2;'>매번 공지 찾아다니느라 지치지 않았나요? 🥲<br><br>장학금·교환학생·취업 정보, 이제 한 곳에서 —<br>내 학년·전공에 맞는 것만 골라 AI가 요약해드려요!</p>", unsafe_allow_html=True)
+        st.write("")
+        st.write("")
+        _, btn_col, _ = st.columns([1, 2, 1])
+        with btn_col:
+            if st.button("→ 시작하기", use_container_width=True, key="landing_start"):
+                st.session_state.page = "login"
+                st.rerun()
+        components.html("""
+        <script>
+        setTimeout(function() {
+            const buttons = window.parent.document.querySelectorAll('button');
+            buttons.forEach(function(btn) {
+                if (btn.innerText.trim() === '→ 시작하기') {
+                    btn.style.setProperty('background-color', '#ddf0df', 'important');
+                    btn.style.setProperty('color', '#1b5e20', 'important');
+                    btn.style.setProperty('font-size', '16px', 'important');
+                    btn.style.setProperty('font-weight', 'bold', 'important');
+                    btn.style.setProperty('border-radius', '12px', 'important');
+                    btn.style.setProperty('border', '2px solid #2e7d32', 'important');
+                    btn.style.setProperty('padding', '14px 24px', 'important');
+                }
+            });
+        }, 100);
+        </script>
+        """, height=0)
+        st.write("")
+        st.markdown("<p style='text-align:center; font-size:12px; color:#aaa;'>*이화여대 재학생이 만든 비공식 서비스</p>", unsafe_allow_html=True)
+
+# ── 로그인 페이지 ──────────────────────────────────────────
+elif st.session_state.page == "login":
+    _, col, _ = st.columns([1, 2, 1])
+    with col:
+        st.markdown("<h1 style='text-align:center;'>🌱 이화여대 정보 허브</h1>", unsafe_allow_html=True)
+        st.markdown("<p style='text-align:center; color:#666; margin-bottom:32px;'>공지 일일이 찾아다니지 마세요 ✨</p>", unsafe_allow_html=True)
+        user_id = st.text_input("아이디", placeholder="아이디 입력")
+        password = st.text_input("비밀번호", type="password", placeholder="비밀번호 입력")
+        st.write("")
+        if st.button("로그인", use_container_width=True):
+            result = login_user(user_id, password)
+            if result:
+                st.session_state.profile = result
+                st.session_state.logged_in = True
+                st.query_params["uid"] = user_id
+                st.session_state.page = "home"
+                st.rerun()
+            else:
+                st.error("아이디 또는 비밀번호가 올바르지 않아요.")
+        st.write("")
+        st.markdown("<p style='text-align:center; color:#666;'>아직 계정이 없으신가요?</p>", unsafe_allow_html=True)
+        if st.button("회원가입하기", use_container_width=True):
+            st.session_state.page = "signup"
+            st.rerun()
+
+# ── 회원가입 페이지 ──────────────────────────────────────────
+elif st.session_state.page == "signup":
+    st.title("🌱 회원가입")
+    st.write("")
+    new_id = st.text_input("아이디 *", placeholder="영어, 숫자만 입력 가능")
+    new_pw = st.text_input("비밀번호 *", type="password", placeholder="비밀번호 입력")
+    new_pw2 = st.text_input("비밀번호 확인 *", type="password", placeholder="비밀번호 다시 입력")
+    grade = st.selectbox("학년 *", ["1학년", "2학년", "3학년", "4학년"])
+    college = st.selectbox("단과대학 *", COLLEGES)
+    major_options = COLLEGE_MAJORS.get(college, ["선택 안 함"])
+    major = st.selectbox("전공 *", major_options)
+    col_email, col_domain = st.columns([3, 2])
+    with col_email:
+        email_prefix = st.text_input("학교 이메일 *", placeholder="이메일 앞부분 입력")
+    with col_domain:
+        st.write("")
+        st.write("")
+        st.markdown("**@ewha.ac.kr**")
+    interests = st.multiselect("관심 분야 (선택)", INTERESTS)
+    email_notify = st.checkbox("📧 이메일로 맞춤 정보 받기 (선택)")
+    st.write("")
+    if st.button("가입하기", use_container_width=True):
+        if not new_id or not new_pw or not email_prefix or college == "선택 안 함" or major == "선택 안 함":
+            st.error("필수 항목을 모두 입력해주세요.")
+        elif not re.match(r'^[a-zA-Z0-9]+$', new_id):
+            st.error("아이디는 영어, 숫자만 입력 가능해요.")
+        elif new_pw != new_pw2:
+            st.error("비밀번호가 일치하지 않아요.")
+        elif len(new_pw) < 4:
+            st.error("비밀번호는 4자 이상 입력해주세요.")
+        else:
+            existing = load_user_from_db(new_id)
+            if existing:
+                st.error("이미 사용 중인 아이디예요.")
+            else:
+                profile = {
+                    "아이디": new_id, "학년": grade, "단과대학": college,
+                    "전공": major, "이메일": f"{email_prefix}@ewha.ac.kr",
+                    "이메일알림": email_notify, "관심분야": interests, "비밀번호": new_pw
+                }
+                save_user_to_db(profile)
+                st.session_state.profile = profile
+                st.session_state.logged_in = True
+                st.query_params["uid"] = new_id
+                st.session_state.page = "home"
+                st.rerun()
+    st.write("")
+    if st.button("← 로그인으로 돌아가기"):
+        st.session_state.page = "login"
+        st.rerun()
 
 # ── 홈 화면 ──────────────────────────────────────────
 if st.session_state.page == "home":
@@ -441,6 +654,7 @@ if st.session_state.page == "home":
         p = st.session_state.profile
         st.caption(f"👋 {p['아이디']}님 · {p['학년']} · {p['단과대학']}")
 
+    st.markdown("<p style='font-size:16px; color:#444444;'>공지 일일이 찾아다니지 마세요. AI가 내 학년·전공에 맞는 장학금·교환학생 정보만 골라드려요 ✨</p>", unsafe_allow_html=True)
     st.write("")
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -480,6 +694,22 @@ elif st.session_state.page == "profile":
     # ── 탭1: 내 프로필 ──
     with tab1:
         st.write("")
+        if not st.session_state.profile:
+            st.markdown("<p style='font-size:14px; color:#555;'>이전에 저장한 프로필이 있으면 아이디로 불러올 수 있어요.</p>", unsafe_allow_html=True)
+            col_id, col_btn = st.columns([3, 1])
+            with col_id:
+                load_id = st.text_input("아이디 입력", placeholder="저장했던 아이디", label_visibility="collapsed")
+            with col_btn:
+                if st.button("불러오기"):
+                    loaded = load_user_from_db(load_id)
+                    if loaded:
+                        st.session_state.profile = loaded
+                        st.query_params["uid"] = load_id
+                        st.success("프로필을 불러왔어요! 🎉")
+                        st.rerun()
+                    else:
+                        st.error("해당 아이디의 프로필을 찾을 수 없어요.")
+            st.divider()
         if st.session_state.profile and not st.session_state.editing_profile:
             p = st.session_state.profile
             st.markdown(f"""
@@ -499,12 +729,17 @@ elif st.session_state.page == "profile":
                 st.rerun()
         else:
             p = st.session_state.profile or {}
+            st.markdown("<p style='font-size:15px; color:#444444;'>입력하신 학년·전공 정보로 나에게 맞는 공지만 골라드려요!</p>", unsafe_allow_html=True)
+            st.write("")
             user_id  = st.text_input("아이디 *", value=p.get("아이디", ""), placeholder="영어, 숫자만 입력 가능")
             grade    = st.selectbox("학년 *", ["1학년", "2학년", "3학년", "4학년"],
                                     index=["1학년","2학년","3학년","4학년"].index(p["학년"]) if p.get("학년") else 0)
             college  = st.selectbox("단과대학 *", COLLEGES,
                                     index=COLLEGES.index(p["단과대학"]) if p.get("단과대학") else 0)
-            major    = st.text_input("전공 *", value=p.get("전공", ""), placeholder="전공을 입력해주세요")
+            major_options = COLLEGE_MAJORS.get(college, ["선택 안 함"])
+            saved_major = p.get("전공", "")
+            major_index = major_options.index(saved_major) if saved_major in major_options else 0
+            major = st.selectbox("전공 *", major_options, index=major_index)
             col_email, col_domain = st.columns([3, 2])
             with col_email:
                 email_prefix = st.text_input("학교 이메일 *",
@@ -520,7 +755,7 @@ elif st.session_state.page == "profile":
             st.markdown("<p style='font-size:13px; color:#000000;'>* 수집된 정보는 맞춤 공지 제공 목적으로만 사용되며, 외부에 제공되지 않습니다.</p>", unsafe_allow_html=True)
             st.write("")
             email_notify = st.checkbox("📧 이메일로 맞춤 정보 받기 (선택)", value=p.get("이메일알림", False))
-            all_filled = bool(user_id and college != "선택 안 함" and major and email_prefix and privacy)
+            all_filled = bool(user_id and college != "선택 안 함" and major and major != "선택 안 함" and email_prefix and privacy)
             st.write("")
             if st.button("저장", disabled=not all_filled):
                 if not re.match(r'^[a-zA-Z0-9]+$', user_id):
@@ -534,6 +769,7 @@ elif st.session_state.page == "profile":
                         "이메일알림": email_notify, "관심분야": interests
                     }
                     save_user_to_db(st.session_state.profile)
+                    st.query_params["uid"] = user_id
                     st.session_state.editing_profile = False
                     st.success("프로필이 저장됐어요! 🎉")
 
@@ -649,7 +885,17 @@ elif st.session_state.page == "detail":
         summary, error = get_ai_summary(notice["제목"], content)
 
     if summary:
-        summary_html = summary.replace("\n", "<br>")
+        lines = summary.split("\n")
+        processed = []
+        for line in lines:
+            processed.append(line)
+            stripped = line.strip()
+            if "📌" in stripped and "대상" in stripped:
+                target_text = stripped.split(":", 1)[-1].strip() if ":" in stripped else stripped
+                evaluation = evaluate_target(target_text, st.session_state.profile)
+                if evaluation:
+                    processed.append(f"&nbsp;&nbsp;&nbsp;<span style='color:#e65100;'>→ 내 정보 기준: {evaluation}</span>")
+        summary_html = "<br>".join(processed)
         st.markdown(f"""
         <div style="background:#f1f8e9; border-left:4px solid #66bb6a; border-radius:8px; padding:18px 22px; margin-bottom:16px;">
             <b style="color:#2e7d32;">✨ AI 요약</b><br><br>
